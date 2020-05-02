@@ -19,9 +19,17 @@ import           Reflex
 import           Reflex.Dom.Core
 ------------------------------------------------------------------------------
 
+-- A dot-separated namespace
+newtype WidgetName = WidgetName { unWidgetName :: Text }
+  deriving (Eq, Ord, IsString)
+
 data InputWidgetConfig t a = InputWidgetConfig
   { _inputWidgetConfig_initialValue :: a
   , _inputWidgetConfig_setValue :: Maybe (Event t a)
+
+  , _inputWidgetConfig_name :: WidgetName
+  , _inputWidgetConfig_initialAttributes :: Map WidgetName (Map AttributeName Text)
+  , _inputWidgetConfig_modifyAttributes :: Map WidgetName (Maybe (Event t (Map AttributeName (Maybe Text))))
   }
 
 inputWidgetConfig_initialValue :: Lens' (InputWidgetConfig t a) a
@@ -33,12 +41,8 @@ inputWidgetConfig_setValue f (InputWidgetConfig iv sv) = (\sv' -> InputWidgetCon
 instance Reflex t => Functor (InputWidgetConfig t) where
   fmap f (InputWidgetConfig iv sv) = InputWidgetConfig (f iv) (fmap f <$> sv)
 
-instance (Reflex t, Default a) => Default (InputWidgetConfig t a) where
-  {-# INLINABLE def #-}
-  def = InputWidgetConfig
-    { _inputWidgetConfig_initialValue = def
-    , _inputWidgetConfig_setValue = Nothing
-    }
+mkIW :: (Reflex t, Default a) => InputWidgetConfig t a
+mkIW name = InputWidgetConfig def Nothing name mempty mempty
 
 -- Implementation note: the _input field is 'Event t ()' instead of 'Event t a'
 -- because this makes it possible to construct an Applicative instance which is
