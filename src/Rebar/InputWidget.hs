@@ -2,6 +2,7 @@ module Frontend.UI.FormWidget
   ( HasInitialValue(..)
   , MakeConfig(..)
   , FormWidgetConfig
+  , FormWidgetConfig'
   , _formWidgetConfig_initialValue
   , _formWidgetConfig_setValue
   , formWidgetConfig_initialValue
@@ -9,6 +10,7 @@ module Frontend.UI.FormWidget
   , iec2fwc
   , fwc2iec
   , PrimFormWidgetConfig
+  , PrimFormWidgetConfig'
   , _primFormWidgetConfig_fwc
   , _primFormWidgetConfig_initialAttributes
   , _primFormWidgetConfig_modifyAttributes
@@ -27,6 +29,7 @@ module Frontend.UI.FormWidget
 ------------------------------------------------------------------------------
 import           Control.Lens
 import           Control.Monad
+import           Data.Bifunctor
 import           Data.Default
 import           Data.Map (Map)
 import qualified Data.Map.Strict as Map
@@ -45,39 +48,53 @@ class HasInitialValue a where
 class MakeConfig cfg a | cfg -> a where
   mkCfg :: a -> cfg
 
-data FormWidgetConfig t a = FormWidgetConfig
-  { _formWidgetConfig_initialValue :: a
-  , _formWidgetConfig_setValue :: Maybe (Event t a)
-  }
+-- A dot-separated namespace
+--newtype WidgetName = WidgetName { unWidgetName :: Text }
+--  deriving (Eq, Ord, IsString)
 
-formWidgetConfig_initialValue :: Lens' (FormWidgetConfig t a) a
+-- | Describes form config information where the value and update types can
+-- differ.
+data FormWidgetConfig t u v = FormWidgetConfig
+  { _formWidgetConfig_initialValue :: v
+  , _formWidgetConfig_setValue :: Maybe (Event t u)
+
+  --, _formWidgetConfig_name :: WidgetName
+  --, _formWidgetConfig_initialAttributes :: Map WidgetName (Map AttributeName Text)
+  --, _formWidgetConfig_modifyAttributes :: Map WidgetName (Maybe (Event t (Map AttributeName (Maybe Text))))
+  }
+type FormWidgetConfig' t a = FormWidgetConfig t a a
+
+formWidgetConfig_initialValue :: Lens' (FormWidgetConfig t u v) v
 formWidgetConfig_initialValue f (FormWidgetConfig iv sv) = (\iv' -> FormWidgetConfig iv' sv) <$> f iv
 
-formWidgetConfig_setValue :: Lens' (FormWidgetConfig t a) (Maybe (Event t a))
+formWidgetConfig_setValue :: Lens' (FormWidgetConfig t u v) (Maybe (Event t u))
 formWidgetConfig_setValue f (FormWidgetConfig iv sv) = (\sv' -> FormWidgetConfig iv sv') <$> f sv
 
-instance Reflex t => Functor (FormWidgetConfig t) where
-  fmap f (FormWidgetConfig iv sv) = FormWidgetConfig (f iv) (fmap f <$> sv)
+instance Reflex t => Functor (FormWidgetConfig t u) where
+  fmap f (FormWidgetConfig iv sv) = FormWidgetConfig (f iv) sv
 
-instance MakeConfig (FormWidgetConfig t a) a where
+instance Reflex t => Bifunctor (FormWidgetConfig t) where
+  bimap f g (FormWidgetConfig iv sv) = FormWidgetConfig (g iv) (fmap f <$> sv)
+
+instance MakeConfig (FormWidgetConfig t u v) v where
   mkCfg a = FormWidgetConfig a Nothing
   {-# INLINABLE mkCfg #-}
 
-instance HasInitialValue (FormWidgetConfig t a) where
-  type InitialValue (FormWidgetConfig t a) = a
+instance HasInitialValue (FormWidgetConfig t u v) where
+  type InitialValue (FormWidgetConfig t u v) = v
   _initialValue = _formWidgetConfig_initialValue
   initialValue = formWidgetConfig_initialValue
 
-instance HasSetValue (FormWidgetConfig t a) where
-  type SetValue (FormWidgetConfig t a) = Maybe (Event t a)
+instance HasSetValue (FormWidgetConfig t u v) where
+  type SetValue (FormWidgetConfig t u v) = Maybe (Event t u)
   setValue = formWidgetConfig_setValue
 
-fwc2iec :: (Reflex t, DomSpace s) => (a -> Text) -> FormWidgetConfig t a -> InputElementConfig EventResult t s
+fwc2iec :: (Reflex t, DomSpace s) => (v -> Text) -> FormWidgetConfig t v v -> InputElementConfig EventResult t s
 fwc2iec toText (FormWidgetConfig iv sv) = def
   & inputElementConfig_initialValue .~ (toText iv)
   & inputElementConfig_setValue .~ (maybe never (fmap toText) sv)
 
-iec2fwc :: Reflex t => (Text -> a) -> InputElementConfig EventResult t s -> FormWidgetConfig t a
+iec2fwc :: Reflex t => (Text -> v) -> InputElementConfig EventResult t s -> FormWidgetConfig t v v
 iec2fwc fromText iec = FormWidgetConfig
   (fromText $ _inputElementConfig_initialValue iec)
   (fmap fromText <$> (_inputElementConfig_setValue iec))
@@ -85,58 +102,62 @@ iec2fwc fromText iec = FormWidgetConfig
 ------------------------------------------------------------------------------
 
 -- A primitive config defines one set of attributes for a single element.
-data PrimFormWidgetConfig t a = PrimFormWidgetConfig
-  { _primFormWidgetConfig_fwc :: FormWidgetConfig t a
+data PrimFormWidgetConfig t u v = PrimFormWidgetConfig
+  { _primFormWidgetConfig_fwc :: FormWidgetConfig t u v
   , _primFormWidgetConfig_initialAttributes :: Map AttributeName Text
   , _primFormWidgetConfig_modifyAttributes :: Maybe (Event t (Map AttributeName (Maybe Text)))
   }
+type PrimFormWidgetConfig' t a = PrimFormWidgetConfig t a a
 
-primFormWidgetConfig_fwc :: Lens' (PrimFormWidgetConfig t a) (FormWidgetConfig t a)
+primFormWidgetConfig_fwc :: Lens' (PrimFormWidgetConfig t u v) (FormWidgetConfig t u v)
 primFormWidgetConfig_fwc f a =
   (\newval -> a { _primFormWidgetConfig_fwc = newval }) <$> f (_primFormWidgetConfig_fwc a)
 
-primFormWidgetConfig_initialAttributes :: Lens' (PrimFormWidgetConfig t a) (Map AttributeName Text)
+primFormWidgetConfig_initialAttributes :: Lens' (PrimFormWidgetConfig t u v) (Map AttributeName Text)
 primFormWidgetConfig_initialAttributes f a =
   (\newval -> a { _primFormWidgetConfig_initialAttributes = newval }) <$> f (_primFormWidgetConfig_initialAttributes a)
 
-primFormWidgetConfig_modifyAttributes :: Reflex t => Lens' (PrimFormWidgetConfig t a) (Event t (Map AttributeName (Maybe Text)))
+primFormWidgetConfig_modifyAttributes :: Reflex t => Lens' (PrimFormWidgetConfig t u v) (Event t (Map AttributeName (Maybe Text)))
 primFormWidgetConfig_modifyAttributes f a =
     (\newval -> a { _primFormWidgetConfig_modifyAttributes = Just newval }) <$> f (getter a)
   where
     getter = fromMaybe never . _primFormWidgetConfig_modifyAttributes
 
-instance Reflex t => Functor (PrimFormWidgetConfig t) where
+instance Reflex t => Functor (PrimFormWidgetConfig t u) where
   fmap f (PrimFormWidgetConfig fwc ia ma) = PrimFormWidgetConfig (f <$> fwc) ia ma
 
-instance MakeConfig (PrimFormWidgetConfig t a) a where
+instance Reflex t => Bifunctor (PrimFormWidgetConfig t) where
+  bimap f g (PrimFormWidgetConfig fwc ia ma) = PrimFormWidgetConfig (bimap f g fwc) ia ma
+
+instance MakeConfig (PrimFormWidgetConfig t u v) v where
   mkCfg a = PrimFormWidgetConfig (mkCfg a) mempty Nothing
   {-# INLINABLE mkCfg #-}
 
-instance InitialAttributes (PrimFormWidgetConfig t a) where
+instance InitialAttributes (PrimFormWidgetConfig t u v) where
   {-# INLINABLE initialAttributes #-}
   initialAttributes = primFormWidgetConfig_initialAttributes
 
-instance ModifyAttributes t (PrimFormWidgetConfig t a) where
+instance ModifyAttributes t (PrimFormWidgetConfig t u v) where
   {-# INLINABLE modifyAttributes #-}
   modifyAttributes = primFormWidgetConfig_modifyAttributes
 
-instance HasInitialValue (PrimFormWidgetConfig t a) where
-  type InitialValue (PrimFormWidgetConfig t a) = a
+instance HasInitialValue (PrimFormWidgetConfig t u v) where
+  type InitialValue (PrimFormWidgetConfig t u v) = v
   _initialValue = _initialValue . _primFormWidgetConfig_fwc
   initialValue = primFormWidgetConfig_fwc . initialValue
 
-instance HasSetValue (PrimFormWidgetConfig t a) where
-  type SetValue (PrimFormWidgetConfig t a) = Maybe (Event t a)
+instance HasSetValue (PrimFormWidgetConfig t u v) where
+  type SetValue (PrimFormWidgetConfig t u v) = Maybe (Event t u)
   setValue = primFormWidgetConfig_fwc . setValue
 
-pfwc2iec :: (Reflex t, DomSpace s) => (a -> Text) -> PrimFormWidgetConfig t a -> InputElementConfig EventResult t s
+pfwc2iec :: (Reflex t, DomSpace s) => (v -> Text) -> PrimFormWidgetConfig t v v -> InputElementConfig EventResult t s
 pfwc2iec toText (PrimFormWidgetConfig (FormWidgetConfig iv sv) ia ma) = def
   & inputElementConfig_initialValue .~ (toText iv)
   & inputElementConfig_setValue .~ (maybe never (fmap toText) sv)
   & initialAttributes .~ ia
   & modifyAttributes .~ fromMaybe never ma
 
-iec2pfwc :: Reflex t => (Text -> a) -> InputElementConfig EventResult t s -> PrimFormWidgetConfig t a
+iec2pfwc :: Reflex t => (Text -> v) -> InputElementConfig EventResult t s -> PrimFormWidgetConfig t v v
 iec2pfwc fromText iec = PrimFormWidgetConfig fwc ia ma
   where
     ia = (_elementConfig_initialAttributes $ _inputElementConfig_elementConfig iec)
