@@ -1,4 +1,4 @@
-module Frontend.UI.FormWidget
+module Rebar.FormWidget
   ( HasInitialValue(..)
   , MakeConfig(..)
   , FormWidgetConfig
