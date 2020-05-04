@@ -8,7 +8,6 @@ import           Reflex.Dom
 import           Rebar.FormWidget
 ------------------------------------------------------------------------------
 
--- | reflex-dom `inputElement` with chainweaver default styling:
 textFormWidget
   :: DomBuilder t m
   => PrimFormWidgetConfig t Text
@@ -17,35 +16,48 @@ textFormWidget cfg = do
     ie <- inputElement $ pfwc2iec id cfg
     return (ie2iw id ie)
 
--- | reflex-dom `inputElement` with chainweaver default styling:
 parsingFormWidget
   :: DomBuilder t m
-  => (Text -> Either String a)
-  -> (Either String a -> Text)
-  -> PrimFormWidgetConfig t (Either String a)
-  -> m (FormWidget t (Either String a))
+  => (Text -> a)
+  -> (a -> Text)
+  -> PrimFormWidgetConfig t a
+  -> m (FormWidget t a)
 parsingFormWidget fromText toText cfg = do
     ie <- inputElement $ pfwc2iec toText cfg
     return (ie2iw fromText ie)
 
 dropdownFormWidget
-  :: DomBuilder t m
-  => (a -> Text)
-  -> (Text -> a)
+  :: (DomBuilder t m, MonadHold t m, PostBuild t m, MonadFix m, Ord a)
+  => Dynamic t (Map a Text)
   -> PrimFormWidgetConfig t a
-  -> m b
-  -> m (FormWidget t a, b)
-dropdownFormWidget toText fromText cfg children = do
-  let seCfg = def
-        & selectElementConfig_initialValue .~ toText (_initialValue cfg)
-        & selectElementConfig_setValue .~ (maybe never (fmap toText) $ view setValue cfg)
-        & initialAttributes .~ view initialAttributes cfg
-        & modifyAttributes .~ view modifyAttributes cfg
-  (se, b) <- selectElement seCfg children
-  let fw = FormWidget (fromText <$> _selectElement_value se)
-                      (() <$ _selectElement_change se)
-                      (_selectElement_hasFocus se)
-  return (fw, b)
+  -> m (FormWidget t a)
+dropdownFormWidget options cfg = do
+  let k0 = _initialValue cfg
+      setK = fromMaybe never $ view setValue cfg
+      initAttrs = view initialAttributes cfg
+      modifyAttrs = view modifyAttributes cfg
+  optionsWithAddedKeys <- fmap (zipDynWith Map.union options) $ foldDyn Map.union (k0 =: "") $ fmap (=: "") setK
+  defaultKey <- holdDyn k0 setK
+  let (indexedOptions, ixKeys) = splitDynPure $ ffor optionsWithAddedKeys $ \os ->
+        let xs = fmap (\(ix, (k, v)) -> ((ix, k), ((ix, k), v))) $ zip [0::Int ..] $ Map.toList os
+        in (Map.fromList $ map snd xs, Bimap.fromList $ map fst xs)
+  let cfg = def
+        & selectElementConfig_elementConfig . elementConfig_initialAttributes .~ initAttrs
+        & selectElementConfig_elementConfig . elementConfig_modifyAttributes .~ modifyAttrs
+        & selectElementConfig_setValue .~ fmap (T.pack . show) (attachPromptlyDynWithMaybe (flip Bimap.lookupR) ixKeys setK)
+  (eRaw, _) <- selectElement cfg $ listWithKey indexedOptions $ \(ix, k) v -> do
+    let optionAttrs = fmap (\dk -> "value" =: T.pack (show ix) <> if dk == k then "selected" =: "selected" else mempty) defaultKey
+    elDynAttr "option" optionAttrs $ dynText v
+  let lookupSelected ks v = do
+        key <- T.readMaybe $ T.unpack v
+        Bimap.lookup key ks
+  let eChange = attachPromptlyDynWith lookupSelected ixKeys $ _selectElement_change eRaw
+  let readKey keys mk = fromMaybe k0 $ do
+        k <- mk
+        guard $ Bimap.memberR k keys
+        return k
+  dValue <- fmap (zipDynWith readKey ixKeys) $ holdDyn (Just k0) $ leftmost [eChange, fmap Just setK]
+  return $ FormWidget dValue (() <$ attachPromptlyDynWith readKey ixKeys eChange) (_selectElement_hasFocus eRaw)
 
 -- | Like comboBoxGlobalDatalist but handles creation of a unique datalist ID
 -- for you and includes the datalist along with the combo box.
