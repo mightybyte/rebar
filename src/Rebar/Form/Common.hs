@@ -25,6 +25,8 @@ import           Control.Monad.Except
 import qualified Data.Bimap as Bimap
 import           Data.Map.Strict             (Map)
 import qualified Data.Map.Strict as Map
+import           Data.Maybe
+import           Data.String
 import           Data.Text                   (Text)
 import qualified Data.Text                   as T
 import qualified Text.Read as T
@@ -36,6 +38,25 @@ import           Reflex.Dom.Core
 import           System.Random
 import           Text.Read                   (readMaybe)
 ------------------------------------------------------------------------------
+import           Rebar.FormWidget
+------------------------------------------------------------------------------
+
+-- | Attributes which will turn off all autocomplete/autofill/autocorrect
+-- functions, including the OS-level suggestions on macOS.
+noAutofillAttrs :: (Ord attr, IsString attr) => Map attr Text
+noAutofillAttrs = Map.fromList
+  [ ("autocomplete", "off")
+  , ("autocorrect", "off")
+  , ("autocapitalize", "off")
+  , ("spellcheck", "false")
+  ]
+
+-- | Factored out input class modifier, so we can keep it in sync.
+addInputElementCls :: (Ord attr, IsString attr) => Map attr Text -> Map attr Text
+addInputElementCls = addToClassAttr "input"
+
+addNoAutofillAttrs :: (Ord attr, IsString attr) => Map attr Text -> Map attr Text
+addNoAutofillAttrs = (noAutofillAttrs <>)
 
 checkboxFormWidget
   :: DomBuilder t m
@@ -77,22 +98,7 @@ decimalFormWidget
   -> m (FormWidget t (Either String Decimal))
 decimalFormWidget cfg = do
   let p t = maybe (Left "Not a valid amount") Right $ readMaybe (T.unpack t)
-  parsingFormWidget p (either (const "") tshow) cfg
-
--- | Standard form element for amount fields.
-positiveDecimalFormWidget
-  :: DomBuilder t m
-  => PrimFormWidgetConfig t (Either String Decimal)
-  -> m (FormWidget t (Either String Decimal))
-positiveDecimalFormWidget cfg = do
-    parsingFormWidget p (either (const "") tshow) cfg
-  where
-    p t = case readMaybe (T.unpack t) of
-            Nothing -> Left "Not a valid number"
-            Just x
-              | x < 0 -> Left "Cannot be negative"
-              | D.decimalPlaces x > maxCoinPrecision -> Left "Too many decimal places"
-              | otherwise -> Right x
+  parsingFormWidget p (either (const "") (T.pack . show)) cfg
 
 -- | The options shown by this widget are the union of the incoming dynamic
 -- options, the initial option, and any changes to the selection passed in from
