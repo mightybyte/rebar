@@ -1,31 +1,102 @@
+{-|
+
+This module contains fairly low level input widgets using the composable
+FormWidget infrastructure.
+
+-}
+
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecursiveDo #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE ViewPatterns #-}
+
 module Rebar.Form.Common where
 
 ------------------------------------------------------------------------------
-import           Data.Text (Text)
-import           Reflex
-import           Reflex.Dom
-------------------------------------------------------------------------------
-import           Rebar.FormWidget
+import           Control.Arrow
+import           Control.Lens hiding (element)
+import           Control.Monad
+import           Control.Monad.Except
+import qualified Data.Bimap as Bimap
+import           Data.Map.Strict             (Map)
+import qualified Data.Map.Strict as Map
+import           Data.Text                   (Text)
+import qualified Data.Text                   as T
+import qualified Text.Read as T
+import           GHC.Word
+import           Data.Decimal                (Decimal)
+import qualified Data.Decimal                as D
+import           Reflex.Dom.Contrib.CssClass
+import           Reflex.Dom.Core
+import           System.Random
+import           Text.Read                   (readMaybe)
 ------------------------------------------------------------------------------
 
+checkboxFormWidget
+  :: DomBuilder t m
+  => PrimFormWidgetConfig t Bool
+  -> m (FormWidget t Bool)
+checkboxFormWidget cfg = do
+    let iecCfg = InputElementConfig "" Nothing (_initialValue cfg) (view setValue cfg) (pfwc2ec cfg)
+    ie <- inputElement $ iecCfg & initialAttributes %~ (("type" =: "checkbox" <>) . addNoAutofillAttrs)
+    return $ FormWidget (_inputElement_checked ie)
+                        (() <$ _inputElement_checkedChange ie)
+                        (_inputElement_hasFocus ie)
+
+-- | reflex-dom `inputElement` with chainweaver default styling:
 textFormWidget
   :: DomBuilder t m
   => PrimFormWidgetConfig t Text
   -> m (FormWidget t Text)
 textFormWidget cfg = do
-    ie <- inputElement $ pfwc2iec id cfg
+    let iecCfg = pfwc2iec id cfg
+    ie <- inputElement $ iecCfg & initialAttributes %~ (addInputElementCls . addNoAutofillAttrs)
     return (ie2iw id ie)
 
+-- | Parsing input element with chainweaver styling
 parsingFormWidget
   :: DomBuilder t m
-  => (Text -> a)
-  -> (a -> Text)
-  -> PrimFormWidgetConfig t a
-  -> m (FormWidget t a)
+  => (Text -> Either String a)
+  -> (Either String a -> Text)
+  -> PrimFormWidgetConfig t (Either String a)
+  -> m (FormWidget t (Either String a))
 parsingFormWidget fromText toText cfg = do
-    ie <- inputElement $ pfwc2iec toText cfg
+    let iecCfg = pfwc2iec toText cfg
+    ie <- inputElement $ iecCfg & initialAttributes %~ (addInputElementCls . addNoAutofillAttrs)
     return (ie2iw fromText ie)
 
+-- | Decimal input element with chainweaver default styling
+decimalFormWidget
+  :: DomBuilder t m
+  => PrimFormWidgetConfig t (Either String Decimal)
+  -> m (FormWidget t (Either String Decimal))
+decimalFormWidget cfg = do
+  let p t = maybe (Left "Not a valid amount") Right $ readMaybe (T.unpack t)
+  parsingFormWidget p (either (const "") tshow) cfg
+
+-- | Standard form element for amount fields.
+positiveDecimalFormWidget
+  :: DomBuilder t m
+  => PrimFormWidgetConfig t (Either String Decimal)
+  -> m (FormWidget t (Either String Decimal))
+positiveDecimalFormWidget cfg = do
+    parsingFormWidget p (either (const "") tshow) cfg
+  where
+    p t = case readMaybe (T.unpack t) of
+            Nothing -> Left "Not a valid number"
+            Just x
+              | x < 0 -> Left "Cannot be negative"
+              | D.decimalPlaces x > maxCoinPrecision -> Left "Too many decimal places"
+              | otherwise -> Right x
+
+-- | The options shown by this widget are the union of the incoming dynamic
+-- options, the initial option, and any changes to the selection passed in from
+-- outside via the setValue event.
 dropdownFormWidget
   :: (DomBuilder t m, MonadHold t m, PostBuild t m, MonadFix m, Ord a)
   => Dynamic t (Map a Text)
@@ -34,19 +105,33 @@ dropdownFormWidget
 dropdownFormWidget options cfg = do
   let k0 = _initialValue cfg
       setK = fromMaybe never $ view setValue cfg
+  optionsWithAddedKeys <- fmap (zipDynWith Map.union options) $ foldDyn Map.union (k0 =: "") $ fmap (=: "") setK
+  unsafeDropdownFormWidget (Map.toList <$> optionsWithAddedKeys) cfg
+
+-- | This dropdown widget does not ensure that the selected value exists in the
+-- options list. It is your responsibility to make sure the dynamic map of
+-- options contains both the initial value AND that if it changes, the current
+-- selected option stays in sync.
+unsafeDropdownFormWidget
+  :: (DomBuilder t m, MonadHold t m, PostBuild t m, MonadFix m, Ord a)
+  => Dynamic t [(a, Text)]
+  -> PrimFormWidgetConfig t a
+  -> m (FormWidget t a)
+unsafeDropdownFormWidget options cfg = do
+  let k0 = _initialValue cfg
+      setK = fromMaybe never $ view setValue cfg
       initAttrs = view initialAttributes cfg
       modifyAttrs = view modifyAttributes cfg
-  optionsWithAddedKeys <- fmap (zipDynWith Map.union options) $ foldDyn Map.union (k0 =: "") $ fmap (=: "") setK
   defaultKey <- holdDyn k0 setK
-  let (indexedOptions, ixKeys) = splitDynPure $ ffor optionsWithAddedKeys $ \os ->
-        let xs = fmap (\(ix, (k, v)) -> ((ix, k), ((ix, k), v))) $ zip [0::Int ..] $ Map.toList os
+  let (indexedOptions, ixKeys) = splitDynPure $ ffor options $ \os ->
+        let xs = fmap (\(i, (k, v)) -> ((i, k), ((i, k), v))) $ zip [0::Int ..] os
         in (Map.fromList $ map snd xs, Bimap.fromList $ map fst xs)
-  let cfg = def
+  let scfg = def
         & selectElementConfig_elementConfig . elementConfig_initialAttributes .~ initAttrs
         & selectElementConfig_elementConfig . elementConfig_modifyAttributes .~ modifyAttrs
         & selectElementConfig_setValue .~ fmap (T.pack . show) (attachPromptlyDynWithMaybe (flip Bimap.lookupR) ixKeys setK)
-  (eRaw, _) <- selectElement cfg $ listWithKey indexedOptions $ \(ix, k) v -> do
-    let optionAttrs = fmap (\dk -> "value" =: T.pack (show ix) <> if dk == k then "selected" =: "selected" else mempty) defaultKey
+  (eRaw, _) <- selectElement scfg $ listWithKey indexedOptions $ \(i, k) v -> do
+    let optionAttrs = fmap (\dk -> "value" =: T.pack (show i) <> if dk == k then "selected" =: "selected" else mempty) defaultKey
     elDynAttr "option" optionAttrs $ dynText v
   let lookupSelected ks v = do
         key <- T.readMaybe $ T.unpack v
@@ -60,7 +145,7 @@ dropdownFormWidget options cfg = do
   return $ FormWidget dValue (() <$ attachPromptlyDynWith readKey ixKeys eChange) (_selectElement_hasFocus eRaw)
 
 -- | Like comboBoxGlobalDatalist but handles creation of a unique datalist ID
--- for you and includes the datalist along with the combo box.
+-- for you.
 comboBox
   :: ( DomBuilder t m, PostBuild t m, MonadFix m, MonadHold t m
      , MonadIO m
@@ -78,9 +163,7 @@ comboBox options cfg = do
 -- | HTML5 combo box widget that presents a dropdown but also allows work like a
 -- text input.
 comboBoxGlobalDatalist
-  :: ( DomBuilder t m, PostBuild t m, MonadFix m, MonadHold t m
-     , MonadIO m
-     )
+  :: DomBuilder t m
   => Text
   -> PrimFormWidgetConfig t Text
   -> m (FormWidget t Text)
@@ -91,8 +174,7 @@ comboBoxGlobalDatalist datalistId cfg = do
 
 -- | Renders an options list suitable for use with HTML5 combo boxes.
 comboBoxDatalist
-  :: ( DomBuilder t m, PostBuild t m, MonadFix m, MonadHold t m
-     )
+  :: (DomBuilder t m, PostBuild t m, MonadFix m, MonadHold t m)
   => Text
   -> Dynamic t [Text]
   -> m ()
