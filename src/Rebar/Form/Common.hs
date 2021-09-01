@@ -41,45 +41,45 @@ import           Text.Read                   (readMaybe)
 import           Rebar.FormWidget
 ------------------------------------------------------------------------------
 
--- | Attributes which will turn off all autocomplete/autofill/autocorrect
--- functions, including the OS-level suggestions on macOS.
-noAutofillAttrs :: (Ord attr, IsString attr) => Map attr Text
-noAutofillAttrs = Map.fromList
-  [ ("autocomplete", "off")
-  , ("autocorrect", "off")
-  , ("autocapitalize", "off")
-  , ("spellcheck", "false")
-  ]
-
--- | Factored out input class modifier, so we can keep it in sync.
-addInputElementCls :: (Ord attr, IsString attr) => Map attr Text -> Map attr Text
-addInputElementCls = addToClassAttr "input"
-
-addNoAutofillAttrs :: (Ord attr, IsString attr) => Map attr Text -> Map attr Text
-addNoAutofillAttrs = (noAutofillAttrs <>)
-
 checkboxFormWidget
   :: DomBuilder t m
   => PrimFormWidgetConfig t Bool
   -> m (FormWidget t Bool)
 checkboxFormWidget cfg = do
     let iecCfg = InputElementConfig "" Nothing (_initialValue cfg) (view setValue cfg) (pfwc2ec cfg)
-    ie <- inputElement $ iecCfg & initialAttributes %~ (("type" =: "checkbox" <>) . addNoAutofillAttrs)
+    ie <- inputElement $ iecCfg & initialAttributes %~ ("type" =: "checkbox" <>)
     return $ FormWidget (_inputElement_checked ie)
                         (() <$ _inputElement_checkedChange ie)
                         (_inputElement_hasFocus ie)
 
--- | reflex-dom `inputElement` with chainweaver default styling:
+-- | reflex-dom `textAreaElement`
+textAreaWidget
+  :: DomBuilder t m
+  => PrimFormWidgetConfig t Text
+  -> m (FormWidget t Text)
+textAreaWidget cfg = do
+    let taCfg = def
+          & textAreaElementConfig_initialValue .~ _formWidgetConfig_initialValue (_primFormWidgetConfig_fwc cfg)
+          & textAreaElementConfig_setValue .~ maybe never id (_formWidgetConfig_setValue $ _primFormWidgetConfig_fwc cfg)
+          & textAreaElementConfig_elementConfig . elementConfig_initialAttributes .~ (_primFormWidgetConfig_initialAttributes cfg)
+          & textAreaElementConfig_elementConfig . elementConfig_modifyAttributes .~ maybe never id (_primFormWidgetConfig_modifyAttributes cfg)
+    ta <- textAreaElement taCfg
+    return $ FormWidget
+      (_textAreaElement_value ta)
+      (() <$ _textAreaElement_input ta)
+      (_textAreaElement_hasFocus ta)
+
+-- | reflex-dom `inputElement`
 textFormWidget
   :: DomBuilder t m
   => PrimFormWidgetConfig t Text
   -> m (FormWidget t Text)
 textFormWidget cfg = do
     let iecCfg = pfwc2iec id cfg
-    ie <- inputElement $ iecCfg & initialAttributes %~ (addInputElementCls . addNoAutofillAttrs)
+    ie <- inputElement iecCfg
     return (ie2iw id ie)
 
--- | Parsing input element with chainweaver styling
+-- | Parsing input element
 parsingFormWidget
   :: DomBuilder t m
   => (Text -> Either String a)
@@ -88,10 +88,10 @@ parsingFormWidget
   -> m (FormWidget t (Either String a))
 parsingFormWidget fromText toText cfg = do
     let iecCfg = pfwc2iec toText cfg
-    ie <- inputElement $ iecCfg & initialAttributes %~ (addInputElementCls . addNoAutofillAttrs)
+    ie <- inputElement iecCfg
     return (ie2iw fromText ie)
 
--- | Decimal input element with chainweaver default styling
+-- | Decimal input element
 decimalFormWidget
   :: DomBuilder t m
   => PrimFormWidgetConfig t (Either String Decimal)
