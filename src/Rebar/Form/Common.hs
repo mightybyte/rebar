@@ -169,7 +169,7 @@ intDropdownFormWidget options cfg = mdo
         & selectElementConfig_initialValue .~ T.pack (show k0)
         & selectElementConfig_elementConfig . elementConfig_initialAttributes .~ initAttrs
         & selectElementConfig_elementConfig . elementConfig_modifyAttributes .~ modifyAttrs
-        & selectElementConfig_setValue .~ traceEvent "Setting intDropdown" (fmap (T.pack . show) setK)
+        & selectElementConfig_setValue .~ fmap (T.pack . show) setK
   (s, _) <- selectElement scfg $ listWithKey options $ \k dv -> do
     let kText = T.pack $ show k
     let mkAttrs curSelected = "value" =: kText <>
