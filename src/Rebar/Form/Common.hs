@@ -150,6 +150,41 @@ unsafeDropdownFormWidget options cfg = do
   dValue <- fmap (zipDynWith readKey ixKeys) $ holdDyn (Just k0) $ leftmost [eChange, fmap Just setK]
   return $ FormWidget dValue (() <$ attachPromptlyDynWith readKey ixKeys eChange) (_selectElement_hasFocus eRaw)
 
+-- | This dropdown uses Int keys so you don't have to know a value in the
+-- options list ahead of time. You can zip your list of options with [0..] and
+-- then use 0 as the initial value. The form's value should only be Nothing when
+-- the options list is empty.
+intDropdownFormWidget
+  :: forall t m a. (DomBuilder t m, MonadHold t m, PostBuild t m, MonadFix m)
+  => Dynamic t (Map Int (a, Text))
+  -> PrimFormWidgetConfig t Int
+  -> m (FormWidget t (Maybe a))
+intDropdownFormWidget options cfg = mdo
+  let k0 = _initialValue cfg
+      setK = fromMaybe never $ view setValue cfg
+      initAttrs = view initialAttributes cfg
+      modifyAttrs = view modifyAttributes cfg
+  let scfg = def
+        & selectElementConfig_initialValue .~ tshow k0
+        & selectElementConfig_elementConfig . elementConfig_initialAttributes .~ initAttrs
+        & selectElementConfig_elementConfig . elementConfig_modifyAttributes .~ modifyAttrs
+        & selectElementConfig_setValue .~ traceEvent "Setting intDropdown" (fmap (T.pack . show) setK)
+  (s, _) <- selectElement scfg $ listWithKey options $ \k dv -> do
+    let kText = tshow k
+    let mkAttrs curSelected = "value" =: kText <> if kText == curSelected then "selected" =: "selected" else mempty
+    elDynAttr "option" (mkAttrs <$> _selectElement_value s) $ dynText (snd <$> dv)
+  --let val = do
+  --      opts <- options
+  --      i <- _selectElement_value s
+  --      pure $ fmap fst $ (\k -> M.lookup k opts) =<< T.readMaybe (T.unpack i)
+  let lookupSelected ks v = do
+        key <- T.readMaybe $ T.unpack v
+        M.lookup key ks
+  let eChange = attachPromptlyDynWith lookupSelected options $ leftmost [_selectElement_change s, tshow <$> setK]
+  opts0 <- sample $ current options
+  dValue <- holdDyn (M.lookup k0 opts0) eChange
+  return $ FormWidget (fst <$$> dValue) (() <$ _selectElement_change s) (_selectElement_hasFocus s)
+
 -- | Like comboBoxGlobalDatalist but handles creation of a unique datalist ID
 -- for you.
 comboBox
