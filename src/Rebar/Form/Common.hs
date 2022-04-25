@@ -13,6 +13,7 @@ FormWidget infrastructure.
 {-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE ViewPatterns #-}
 
 module Rebar.Form.Common where
@@ -165,25 +166,22 @@ intDropdownFormWidget options cfg = mdo
       initAttrs = view initialAttributes cfg
       modifyAttrs = view modifyAttributes cfg
   let scfg = def
-        & selectElementConfig_initialValue .~ tshow k0
+        & selectElementConfig_initialValue .~ T.pack (show k0)
         & selectElementConfig_elementConfig . elementConfig_initialAttributes .~ initAttrs
         & selectElementConfig_elementConfig . elementConfig_modifyAttributes .~ modifyAttrs
         & selectElementConfig_setValue .~ traceEvent "Setting intDropdown" (fmap (T.pack . show) setK)
   (s, _) <- selectElement scfg $ listWithKey options $ \k dv -> do
-    let kText = tshow k
-    let mkAttrs curSelected = "value" =: kText <> if kText == curSelected then "selected" =: "selected" else mempty
+    let kText = T.pack $ show k
+    let mkAttrs curSelected = "value" =: kText <>
+          if kText == curSelected then "selected" =: "selected" else mempty
     elDynAttr "option" (mkAttrs <$> _selectElement_value s) $ dynText (snd <$> dv)
-  --let val = do
-  --      opts <- options
-  --      i <- _selectElement_value s
-  --      pure $ fmap fst $ (\k -> M.lookup k opts) =<< T.readMaybe (T.unpack i)
   let lookupSelected ks v = do
         key <- T.readMaybe $ T.unpack v
-        M.lookup key ks
-  let eChange = attachPromptlyDynWith lookupSelected options $ leftmost [_selectElement_change s, tshow <$> setK]
+        Map.lookup key ks
+  let eChange = attachPromptlyDynWith lookupSelected options $ leftmost [_selectElement_change s, T.pack . show <$> setK]
   opts0 <- sample $ current options
-  dValue <- holdDyn (M.lookup k0 opts0) eChange
-  return $ FormWidget (fst <$$> dValue) (() <$ _selectElement_change s) (_selectElement_hasFocus s)
+  dValue <- holdDyn (Map.lookup k0 opts0) eChange
+  return $ FormWidget (fmap fst <$> dValue) (() <$ _selectElement_change s) (_selectElement_hasFocus s)
 
 -- | Like comboBoxGlobalDatalist but handles creation of a unique datalist ID
 -- for you.
